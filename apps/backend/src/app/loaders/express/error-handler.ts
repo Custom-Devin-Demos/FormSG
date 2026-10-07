@@ -25,6 +25,61 @@ const isHTTPLikeError = (
   return types.isNativeError(err) && 'statusCode' in err
 }
 
+const STATIC_ASSET_FORWARDED_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-encoding',
+  'cache-control',
+  'etag',
+  'last-modified',
+] as const
+
+/**
+ * Builds the URL of the requested asset within the static assets bucket.
+ * Returns null if the request path could resolve to anything outside the
+ * static assets bucket (e.g. via plain or percent-encoded dot segments).
+ */
+export const getStaticAssetUrl = (
+  originalUrl: string,
+  staticAssetsBucketUrl: string,
+): string | null => {
+  // Drop query and hash; only the path is forwarded to the bucket
+  const path = originalUrl.split(/[?#]/)[0]
+
+  if (!path.startsWith('/') || /%(2f|5c)/i.test(path)) return null
+
+  let decodedPath: string
+  try {
+    decodedPath = decodeURIComponent(path)
+  } catch {
+    return null
+  }
+
+  if (
+    /[\\\0]/.test(decodedPath) ||
+    decodedPath
+      .split('/')
+      .some((segment) => segment === '.' || segment === '..')
+  ) {
+    return null
+  }
+
+  const bucketUrl = new URL(staticAssetsBucketUrl)
+  const bucketPathPrefix = `${bucketUrl.pathname.replace(/\/+$/, '')}/`
+  const assetUrl = new URL(
+    `${bucketUrl.origin}${bucketPathPrefix.slice(0, -1)}${path}`,
+  )
+
+  if (
+    assetUrl.origin !== bucketUrl.origin ||
+    !assetUrl.pathname.startsWith(bucketPathPrefix)
+  ) {
+    return null
+  }
+
+  return assetUrl.toString()
+}
+
 // If static no middleware responded
 export const catchNonExistentStaticRoutesMiddleware: RequestHandler = async (
   req,
@@ -33,20 +88,19 @@ export const catchNonExistentStaticRoutesMiddleware: RequestHandler = async (
   // Attempt to fetch from s3 bucket
 
   try {
-    const path = req.originalUrl.split(/[?#]/)[0] // drop (potential) query and hash, since they're not involved in traversal
+    const assetUrl = getStaticAssetUrl(
+      req.originalUrl,
+      config.aws.staticAssetsBucketUrl,
+    )
 
-    if (/\.\.[/\\]/.test(path)) {
-      // Path contains traversal token(s), we do not expect or allow that
-      // Should we return a 400?
+    if (!assetUrl) {
+      // Path could escape the static assets bucket, we do not expect or allow that
       throw new Error('Non-redirectable URL')
     }
 
-    const { data, status, headers } = await axios.get(
-      `${config.aws.staticAssetsBucketUrl}${req.originalUrl}`,
-      {
-        responseType: 'stream',
-      },
-    )
+    const { data, status, headers } = await axios.get(assetUrl, {
+      responseType: 'stream',
+    })
     // If get request succeeds pipe the data back
     logger.info({
       message: 'Serving static asset from S3',
@@ -56,7 +110,12 @@ export const catchNonExistentStaticRoutesMiddleware: RequestHandler = async (
       },
     })
     res.status(status)
-    res.set(headers)
+    for (const header of STATIC_ASSET_FORWARDED_HEADERS) {
+      const value = headers[header]
+      if (value !== undefined && value !== null) {
+        res.set(header, String(value))
+      }
+    }
     data.pipe(res)
   } catch (err) {
     // Else return 404

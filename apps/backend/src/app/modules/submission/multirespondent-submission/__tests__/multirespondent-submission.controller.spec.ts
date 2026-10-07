@@ -1378,6 +1378,7 @@ describe('multirespondent-submision.controller', () => {
       expect(
         MockMultiRespondentSubmissionService.getPendingStepRecipientEmailsFromSubmittedStepsMeta,
       ).toHaveBeenCalledWith({
+        formId: mockFormId,
         submissionId: mockSubmissionId,
       })
 

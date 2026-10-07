@@ -704,6 +704,7 @@ const sendPendingMrfSubmissionReminder: ControllerHandler<
         )
       }
       return getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: String(form._id),
         submissionId,
       }).map(({ recipientEmails, reminderStepNumber }) => ({
         recipientEmails,

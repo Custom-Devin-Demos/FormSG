@@ -38,6 +38,7 @@ import * as FormService from '../../../form/form.service'
 import {
   MrfReminderInvalidWorkflowStepError,
   MrfReminderRecipientEmailsEmptyError,
+  SubmissionNotFoundError,
   SubmissionSaveError,
 } from '../../submission.errors'
 import { mapRouteError } from '../../submission.utils'
@@ -3233,10 +3234,13 @@ describe('multirespondent-submission.service', () => {
   })
 
   describe('getPendingStepRecipientEmailsFromSubmittedStepsMeta', () => {
+    const MOCK_PENDING_REMINDER_FORM_ID = new ObjectId().toHexString()
+
     it('gets correct recipient emails for 2nd step of 5-step mrf submission', async () => {
       // Arrange
       const mockEmails = ['test@example.com']
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}, {}, {}, {}],
         submittedSteps: [
           {
@@ -3251,6 +3255,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3264,6 +3269,7 @@ describe('multirespondent-submission.service', () => {
       // Arrange
       const mockEmails = ['test@example.com', 'test2@example.com']
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}, {}, {}],
         submittedSteps: [
           { nextStepRecipientEmails: ['old@example.com'] },
@@ -3281,6 +3287,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3294,6 +3301,7 @@ describe('multirespondent-submission.service', () => {
       // Arrange
       const mockEmails = ['test@example.com']
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}],
         submittedSteps: [
           {
@@ -3308,6 +3316,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3321,6 +3330,7 @@ describe('multirespondent-submission.service', () => {
       // Arrange
       const mockEmails = ['test@example.com']
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}, {}, {}],
         submittedSteps: [
           { nextStepRecipientEmails: ['old1@example.com'] },
@@ -3335,6 +3345,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3347,6 +3358,7 @@ describe('multirespondent-submission.service', () => {
     it('throws pending step not found error for 2nd step where it is rejected ie, completed workflow', async () => {
       // Arrange
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}, {}],
         submittedSteps: [
           { nextStepRecipientEmails: ['old1@example.com'] },
@@ -3363,6 +3375,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3376,6 +3389,7 @@ describe('multirespondent-submission.service', () => {
     it('throws pending step not found for all steps submitted ie, commpleted workflow', async () => {
       // Arrange
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}],
         submittedSteps: [
           { nextStepRecipientEmails: ['old1@example.com'] },
@@ -3389,6 +3403,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3402,6 +3417,7 @@ describe('multirespondent-submission.service', () => {
     it('throws recipient email not found for valid pending step ie 3rd step of 4-step mrf submission but recipient emails is not found in pending step metadata', async () => {
       // Arrange
       const mockSubmission = {
+        form: MOCK_PENDING_REMINDER_FORM_ID,
         workflow: [{}, {}, {}, {}],
         submittedSteps: [{ nextStepRecipientEmails: ['old@example.com'] }, {}],
       } as unknown as IMultirespondentSubmissionSchema
@@ -3412,6 +3428,7 @@ describe('multirespondent-submission.service', () => {
 
       // Act
       const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
         submissionId: 'submissionId',
       })
 
@@ -3420,6 +3437,29 @@ describe('multirespondent-submission.service', () => {
       expect(result._unsafeUnwrapErr()).toBeInstanceOf(
         MrfReminderRecipientEmailsEmptyError,
       )
+    })
+
+    it('returns SubmissionNotFoundError when submission does not belong to the form', async () => {
+      // Arrange
+      const mockSubmission = {
+        form: new ObjectId().toHexString(),
+        workflow: [{}, {}],
+        submittedSteps: [{ nextStepRecipientEmails: ['test@example.com'] }],
+      } as unknown as IMultirespondentSubmissionSchema
+
+      jest
+        .spyOn(MultirespondentSubmissionService, 'getMultirespondentSubmission')
+        .mockReturnValue(okAsync(mockSubmission))
+
+      // Act
+      const result = await getPendingStepRecipientEmailsFromSubmittedStepsMeta({
+        formId: MOCK_PENDING_REMINDER_FORM_ID,
+        submissionId: 'submissionId',
+      })
+
+      // Assert
+      expect(result.isErr()).toBe(true)
+      expect(result._unsafeUnwrapErr()).toBeInstanceOf(SubmissionNotFoundError)
     })
   })
 

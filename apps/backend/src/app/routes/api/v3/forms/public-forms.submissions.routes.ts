@@ -83,7 +83,9 @@ PublicFormsSubmissionsRouter.route(
  * @route POST /forms/:formId/submissions/get-s3-presigned-post-data
  * @param response.body.required - contains field ids and sizes of attachments
  * @returns 200 - presigned post data generated
- * @returns 400 - ids are invalid or attachment size exceeds limit
+ * @returns 400 - ids are invalid, sizes are not positive integers, too many attachments, attachment size exceeds limit or form is not an encrypt/multirespondent form
+ * @returns 404 - form not found, or encrypt mode form is not public
+ * @returns 410 - form is archived
  * @returns 500 - failed to generate presigned post data
  */
 PublicFormsSubmissionsRouter.route(
@@ -100,7 +102,9 @@ PublicFormsSubmissionsRouter.route(
  * @route POST /forms/:formId/submissions/get-s3-presigned-post-data
  * @param response.body.required - contains field ids and sizes of attachments
  * @returns 200 - presigned post data generated
- * @returns 400 - ids are invalid or attachment size exceeds limit
+ * @returns 400 - ids are invalid, sizes are not positive integers, too many attachments, attachment size exceeds limit or form is not an encrypt/multirespondent form
+ * @returns 404 - form not found, or encrypt mode form is not public
+ * @returns 410 - form is archived
  * @returns 500 - failed to generate presigned post data
  */
 PublicFormsSubmissionsRouter.route(

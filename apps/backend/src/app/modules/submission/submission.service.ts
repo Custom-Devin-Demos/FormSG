@@ -82,6 +82,7 @@ import {
   GuardDutyMaliciousFileDetectedError,
   GuardDutyParseVirusScannerLambdaPayloadError,
   GuardDutyVirusScanFailedError,
+  InvalidAttachmentSizeError,
   InvalidFieldIdError,
   InvalidFileExtensionError,
   InvalidFileKeyError,
@@ -1138,12 +1139,23 @@ export const getQuarantinePresignedPostData = (
   attachmentSizes: AttachmentSizeMapType[],
 ): ResultAsync<
   AttachmentPresignedPostDataMapType[],
-  CreatePresignedPostError
+  | CreatePresignedPostError
+  | InvalidAttachmentSizeError
+  | AttachmentSizeLimitExceededError
+  | InvalidFieldIdError
 > => {
   // List of attachments is looped over twice to avoid side effects of mutating variables
   // to check if the attachment limits have been exceeded.
 
-  // Step 1: Check for the total attachment size
+  // Step 1a: Reject non-positive or non-integer sizes, which would otherwise
+  // offset the total size check below
+  if (
+    attachmentSizes.some(({ size }) => !Number.isInteger(size) || size <= 0)
+  ) {
+    return errAsync(new InvalidAttachmentSizeError())
+  }
+
+  // Step 1b: Check for the total attachment size
   const totalAttachmentSizeLimit = fileSizeLimitBytes(FormResponseMode.Encrypt)
   const totalAttachmentSize = attachmentSizes
     .map(({ size }) => size)

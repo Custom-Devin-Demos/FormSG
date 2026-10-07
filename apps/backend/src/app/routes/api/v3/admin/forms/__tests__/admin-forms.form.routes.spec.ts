@@ -35,6 +35,7 @@ import * as AuthService from 'src/app/modules/auth/auth.service'
 import {
   DatabaseError,
   DatabasePayloadSizeError,
+  DatabaseValidationError,
 } from 'src/app/modules/core/core.errors'
 import { formatErrorRecoveryMessage } from 'src/app/utils/handle-mongo-error'
 import { IAdminFeedbackSchema, IPopulatedForm, IUserSchema } from 'src/types'
@@ -206,8 +207,6 @@ describe('admin-form.form.routes', () => {
           emails: defaultUser.email,
           responseMode: 'email',
           title: 'email mode form test',
-          // Extra keys should be fine.
-          someExtraKey: 'extra value that will be ignored.',
         },
       }
 
@@ -256,8 +255,6 @@ describe('admin-form.form.routes', () => {
           title: 'storage mode form test',
           publicKey: 'some random public key',
           emails: [],
-          // Extra keys should be fine.
-          someExtraKey: 'extra value that will be ignored.',
         },
       }
 
@@ -732,28 +729,89 @@ describe('admin-form.form.routes', () => {
       expect(response.body).toEqual({ message: 'User not found' })
     })
 
-    it('should return 422 when form creation results in a database validation error', async () => {
+    it('should return 400 when body.form contains keys outside the allowlist', async () => {
       // Arrange
-      const emailParamsWithInvalidDomain = {
+      const createEmailParams = {
         form: {
           emails: defaultUser.email,
           responseMode: 'email',
-          title: 'email mode form test should fail',
-          permissionList: [{ email: 'not a valid email' }],
+          title: 'email mode form test',
+          someExtraKey: 'extra value',
         },
       }
 
       // Act
       const response = await request
         .post('/admin/forms')
-        .send(emailParamsWithInvalidDomain)
+        .send(createEmailParams)
+
+      // Assert
+      expect(response.status).toEqual(400)
+      expect(response.body.message).toEqual('Validation failed')
+      await expect(FormModel.countDocuments()).resolves.toEqual(0)
+    })
+
+    it.each([
+      [
+        'payments_channel',
+        {
+          channel: 'Stripe',
+          target_account_id: 'acct_victim',
+          publishable_key: 'pk_test_victim',
+        },
+      ],
+      ['payments_field', { enabled: true }],
+      ['permissionList', [{ email: 'collaborator@example.com', write: true }]],
+      ['status', FormStatus.Public],
+      ['admin', new Types.ObjectId().toHexString()],
+    ])(
+      'should return 400 and not create a form when server-controlled key %s is provided',
+      async (key, value) => {
+        // Arrange
+        const createStorageParams = {
+          form: {
+            responseMode: 'encrypt',
+            title: 'storage mode form test',
+            publicKey: 'some random public key',
+            emails: [],
+            [key]: value,
+          },
+        }
+
+        // Act
+        const response = await request
+          .post('/admin/forms')
+          .send(createStorageParams)
+
+        // Assert
+        expect(response.status).toEqual(400)
+        expect(response.body.message).toEqual('Validation failed')
+        await expect(FormModel.countDocuments()).resolves.toEqual(0)
+      },
+    )
+
+    it('should return 422 when form creation results in a database validation error', async () => {
+      // Arrange
+      const createEmailParams = {
+        form: {
+          emails: defaultUser.email,
+          responseMode: 'email',
+          title: 'email mode form test should fail',
+        },
+      }
+      const validationError = new DatabaseValidationError('invalid form')
+      jest
+        .spyOn(AdminFormService, 'createForm')
+        .mockReturnValueOnce(errAsync(validationError))
+
+      // Act
+      const response = await request
+        .post('/admin/forms')
+        .send(createEmailParams)
 
       // Assert
       expect(response.status).toEqual(422)
-      expect(response.body).toEqual({
-        message:
-          'Error: [Failed to update collaborators list.]. Please refresh and try again. If you still need help, email us at form@open.gov.sg.',
-      })
+      expect(response.body).toEqual({ message: validationError.message })
     })
 
     it('should return 500 when database error occurs whilst creating a form', async () => {

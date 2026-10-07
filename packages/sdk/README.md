@@ -175,6 +175,19 @@ If the contents of any file fails to decrypt or there is a mismatch between the 
 
 Attachments are downloaded using S3 pre-signed URLs, with a expiry time of _one hour_. You must call `decryptWithAttachments` within this time window, or else the URL to the encrypted files will become invalid.
 
+Attachment download URLs are part of the unsigned webhook body, so the SDK only downloads them over `https` from Amazon S3 hosts (`*.amazonaws.com` S3 endpoints), without following redirects, with a 30 second timeout and a 32 MiB size limit. If any URL fails these checks, `null` is returned and nothing is downloaded. To use a different storage host (e.g. a self-hosted FormSG instance with another S3-compatible provider) or to pin your exact attachment bucket host, pass `attachmentDownloadOptions` when initialising the SDK:
+
+```javascript
+const formsg = require('@opengovsg/formsg-sdk')({
+  attachmentDownloadOptions: {
+    // Exact hostnames, or `*.example.com` to match subdomains. Replaces the default S3 allowlist.
+    allowedHosts: ['my-attachment-bucket.s3.ap-southeast-1.amazonaws.com'],
+    timeout: 30000, // milliseconds
+    maxContentLength: 32 * 1024 * 1024, // bytes
+  },
+})
+```
+
 Attachments are end-to-end encrypted in the same way as normal form submissions, so any eavesdropper will not be able to view form attachments without your secret key.
 
 _Warning:_ We do not have the ability to scan any attachments for malicious content (e.g. spyware or viruses), so careful handling is needed.

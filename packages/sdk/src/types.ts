@@ -5,6 +5,21 @@ export type PackageInitParams = {
   verificationOptions?: VerificationOptions
   /** Initializes public key used for verifying and decrypting in this package. If not given, will default to "production". */
   mode?: PackageMode
+  /** Restricts where `decryptWithAttachments` may download attachments from. */
+  attachmentDownloadOptions?: AttachmentDownloadOptions
+}
+
+export type AttachmentDownloadOptions = {
+  /**
+   * Hostnames attachments may be downloaded from. An entry of the form
+   * `*.example.com` matches any subdomain of `example.com`. Defaults to
+   * Amazon S3 hostnames, which FormSG uses for attachment downloads.
+   */
+  allowedHosts?: string[]
+  /** Download timeout in milliseconds. Defaults to 30 seconds. */
+  timeout?: number
+  /** Maximum download size in bytes. Defaults to 32 MiB. */
+  maxContentLength?: number
 }
 
 // A field type available in FormSG as a string
@@ -51,6 +66,7 @@ export type FormFieldsV3 = Record<
   string,
   {
     fieldType: FieldType
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     answer: any // too complex to represent here
   }
 >
@@ -88,12 +104,14 @@ export interface DecryptParamsV3 {
 
 export type DecryptedContent = {
   responses: FormField[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   verified?: Record<string, any>
 }
 
 export type DecryptedContentV3 = {
   submissionSecretKey: string
   responses: FormFieldsV3
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   verified?: Record<string, any>
 }
 

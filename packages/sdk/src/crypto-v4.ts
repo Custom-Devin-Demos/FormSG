@@ -1,6 +1,6 @@
 import CryptoBase from './crypto-base'
 import CryptoV3 from './crypto-v3'
-import { EncryptedContentV3 } from './types'
+import { AttachmentDownloadOptions, EncryptedContentV3 } from './types'
 import {
   DecryptedContentAndAttachmentsV4,
   DecryptedContentV4,
@@ -12,8 +12,14 @@ import {
 export default class CryptoV4 extends CryptoBase {
   private readonly crypto: CryptoV3
 
-  constructor({ signingPublicKey }: { signingPublicKey?: string } = {}) {
-    super()
+  constructor({
+    signingPublicKey,
+    attachmentDownloadOptions,
+  }: {
+    signingPublicKey?: string
+    attachmentDownloadOptions?: AttachmentDownloadOptions
+  } = {}) {
+    super(attachmentDownloadOptions)
     this.crypto = new CryptoV3({ signingPublicKey })
   }
 

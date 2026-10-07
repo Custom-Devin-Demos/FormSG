@@ -9,13 +9,60 @@ import {
 import { decodeBase64, encodeBase64 } from './util/encoding'
 import { AttachmentDecryptionError } from './errors'
 import {
+  AttachmentDownloadOptions,
   DecryptedAttachments,
   EncryptedAttachmentContent,
   EncryptedAttachmentRecords,
   EncryptedFileContent,
 } from './types'
 
+const DEFAULT_ATTACHMENT_DOWNLOAD_TIMEOUT_MS = 30_000
+// Fits the largest (20MB) attachment after base64 and JSON envelope overhead.
+const DEFAULT_ATTACHMENT_MAX_CONTENT_LENGTH = 32 * 1024 * 1024
+// Amazon S3 endpoints, e.g. bucket.s3.ap-southeast-1.amazonaws.com
+const S3_HOSTNAME_REGEX =
+  /^(?:[a-z0-9][a-z0-9.-]*\.)?s3(?:-accelerate)?(?:\.dualstack)?(?:[.-][a-z]{2}(?:-gov)?-[a-z]+-\d+)?\.amazonaws\.com$/
+
+const isAllowedHost = (hostname: string, allowedHosts?: string[]): boolean => {
+  if (!allowedHosts) return S3_HOSTNAME_REGEX.test(hostname)
+  return allowedHosts.some((entry) => {
+    const allowed = entry.toLowerCase()
+    return allowed.startsWith('*.')
+      ? hostname.endsWith(allowed.slice(1))
+      : hostname === allowed
+  })
+}
+
+/**
+ * Attachment download URLs arrive unauthenticated in the webhook body, so only
+ * fetch https URLs on the default port from allowed hosts.
+ */
+const isAllowedAttachmentUrl = (
+  url: string,
+  allowedHosts?: string[]
+): boolean => {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  return (
+    parsed.protocol === 'https:' &&
+    parsed.port === '' &&
+    parsed.username === '' &&
+    parsed.password === '' &&
+    isAllowedHost(parsed.hostname.toLowerCase(), allowedHosts)
+  )
+}
+
 export default class CryptoBase {
+  protected readonly attachmentDownloadOptions: AttachmentDownloadOptions
+
+  constructor(attachmentDownloadOptions: AttachmentDownloadOptions = {}) {
+    this.attachmentDownloadOptions = attachmentDownloadOptions
+  }
+
   protected decryptAttachments = async (
     secretKey: string,
     urls: EncryptedAttachmentRecords,
@@ -23,13 +70,28 @@ export default class CryptoBase {
   ): Promise<DecryptedAttachments | null> => {
     const fieldIds = Object.keys(urls)
     if (!areAttachmentFieldIdsValid(fieldIds, filenames)) return null
+    const { allowedHosts, timeout, maxContentLength } =
+      this.attachmentDownloadOptions
+    if (
+      !fieldIds.every((fieldId) =>
+        isAllowedAttachmentUrl(urls[fieldId], allowedHosts)
+      )
+    ) {
+      return null
+    }
     const attachments: DecryptedAttachments = {}
     try {
       await Promise.all(
         fieldIds.map(async (fieldId) => {
           const { data } = await axios.get<EncryptedAttachmentContent>(
             urls[fieldId],
-            { responseType: 'json' }
+            {
+              responseType: 'json',
+              maxRedirects: 0,
+              timeout: timeout ?? DEFAULT_ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
+              maxContentLength:
+                maxContentLength ?? DEFAULT_ATTACHMENT_MAX_CONTENT_LENGTH,
+            }
           )
           const content = await this.decryptFile(
             secretKey,

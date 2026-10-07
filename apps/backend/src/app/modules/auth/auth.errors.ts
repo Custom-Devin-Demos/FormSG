@@ -14,6 +14,14 @@ export class InvalidOtpError extends ApplicationError {
   }
 }
 
+export class OtpRequestCountExceededError extends ApplicationError {
+  constructor(
+    message = 'You have requested too many OTPs. Please use the latest OTP sent to your email, or try again later.',
+  ) {
+    super(message, undefined, ErrorCodes.AUTH_OTP_REQUEST_COUNT_EXCEEDED)
+  }
+}
+
 export class InvalidTokenError extends ApplicationError {
   constructor(message = 'Invalid API Key') {
     super(message, undefined, ErrorCodes.AUTH_INVALID_TOKEN)

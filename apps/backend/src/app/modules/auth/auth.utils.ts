@@ -43,6 +43,11 @@ export const mapRouteError: MapRouteError = (error, coreErrorMessage) => {
         statusCode: StatusCodes.UNPROCESSABLE_ENTITY,
         errorMessage: error.message,
       }
+    case AuthErrors.OtpRequestCountExceededError:
+      return {
+        statusCode: StatusCodes.TOO_MANY_REQUESTS,
+        errorMessage: error.message,
+      }
     case MailErrors.MailSendError:
     case HashingError:
     case CoreErrors.DatabaseError:

@@ -35,6 +35,7 @@ import {
   InvalidOtpError,
   InvalidTokenError,
   MissingTokenError,
+  OtpRequestCountExceededError,
 } from './auth.errors'
 
 const logger = createLoggerWithLabel(module)
@@ -42,6 +43,8 @@ const TokenModel = getTokenModel(mongoose)
 const AgencyModel = getAgencyModel(mongoose)
 
 export const MAX_OTP_ATTEMPTS = 10
+// Max login OTPs that can be sent to an email before its current OTP expires.
+export const MAX_OTP_REQUESTS = 10
 
 /**
  * Validates the domain of the given email. A domain is valid if it exists in
@@ -105,19 +108,24 @@ export const createLoginOtp = (
   email: string,
 ): ResultAsync<
   { otp: string; otpPrefix: string },
-  HashingError | DatabaseError | InvalidDomainError
+  | HashingError
+  | DatabaseError
+  | InvalidDomainError
+  | OtpRequestCountExceededError
 > => {
   if (!validator.isEmail(email)) {
     return errAsync(new InvalidDomainError())
   }
 
   return (
-    // Step 1: Generate and hash OTP.
-    generateOtpWithHash({ logMeta: { email } })
-      // Step 2: Upsert otp hash into database.
+    // Step 1: Ensure email has not hit the OTP request limit.
+    assertOtpRequestLimitNotReached(email)
+      // Step 2: Generate and hash OTP.
+      .andThen(() => generateOtpWithHash({ logMeta: { email } }))
+      // Step 3: Upsert otp hash into database.
       .andThen(({ otp, hashedOtp, otpPrefix }) =>
         upsertOtp(email, hashedOtp)
-          // Step 3: Return generated OTP.
+          // Step 4: Return generated OTP.
           .map(() => {
             return { otp, otpPrefix }
           }),
@@ -155,6 +163,60 @@ export const verifyLoginOtp = (
 }
 
 // Private helper functions
+/**
+ * Asserts that fewer than MAX_OTP_REQUESTS login OTPs have been sent to the
+ * given email within the lifespan of its current OTP. Throttling per email
+ * prevents OTP email flooding regardless of how many IPs requests come from.
+ * @param email the email to check the OTP request count for
+ * @returns ok(true) if another OTP may be sent
+ * @returns err(OtpRequestCountExceededError) if the limit has been reached
+ * @returns err(DatabaseError) if any database error occurs
+ */
+const assertOtpRequestLimitNotReached = (
+  email: string,
+): ResultAsync<true, OtpRequestCountExceededError | DatabaseError> => {
+  const mapDbError = (error: unknown) => {
+    logger.error({
+      message: 'Database error when checking OTP request count',
+      meta: {
+        action: 'assertOtpRequestLimitNotReached',
+        email,
+      },
+      error,
+    })
+    return new DatabaseError()
+  }
+
+  return ResultAsync.fromPromise(
+    TokenModel.findOne({ email }).exec(),
+    mapDbError,
+  ).andThen((token) => {
+    if (!token) return okAsync(true as const)
+
+    if (token.expireAt <= new Date()) {
+      // Expired token pending TTL cleanup; remove it so its count resets.
+      return ResultAsync.fromPromise(
+        TokenModel.deleteOne({ _id: token._id }).exec(),
+        mapDbError,
+      ).map(() => true as const)
+    }
+
+    if ((token.numOtpSent ?? 0) >= MAX_OTP_REQUESTS) {
+      logger.warn({
+        message: 'Login OTP request count exceeded',
+        meta: {
+          action: 'assertOtpRequestLimitNotReached',
+          email,
+          numOtpSent: token.numOtpSent,
+        },
+      })
+      return errAsync(new OtpRequestCountExceededError())
+    }
+
+    return okAsync(true as const)
+  })
+}
+
 /**
  * Asserts that the otp matches with the given hash.
  * @param otp the otp to check match for

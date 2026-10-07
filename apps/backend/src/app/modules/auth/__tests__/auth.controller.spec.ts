@@ -9,7 +9,11 @@ import { MailSendError } from '../../../services/mail/mail.errors'
 import { DatabaseError } from '../../core/core.errors'
 import * as UserService from '../../user/user.service'
 import * as AuthController from '../auth.controller'
-import { InvalidDomainError, InvalidOtpError } from '../auth.errors'
+import {
+  InvalidDomainError,
+  InvalidOtpError,
+  OtpRequestCountExceededError,
+} from '../auth.errors'
 import * as AuthService from '../auth.service'
 
 const VALID_EMAIL = 'test@example.com'
@@ -136,6 +140,28 @@ describe('auth.controller', () => {
       })
       // Sending login OTP should not have been called.
       expect(MockAuthService.createLoginOtp).toHaveBeenCalledTimes(1)
+      expect(MockMailService.sendLoginOtp).not.toHaveBeenCalled()
+    })
+
+    it('should return 429 when max OTP requests have been sent for the email', async () => {
+      // Arrange
+      const mockRes = expressHandler.mockResponse()
+      MockAuthService.validateEmailDomain.mockReturnValueOnce(
+        okAsync(<AgencyDocument>{}),
+      )
+      const expectedError = new OtpRequestCountExceededError()
+      MockAuthService.createLoginOtp.mockReturnValueOnce(
+        errAsync(expectedError),
+      )
+
+      // Act
+      await AuthController._handleLoginSendOtp(MOCK_REQ, mockRes, jest.fn())
+
+      // Assert
+      expect(mockRes.status).toHaveBeenCalledWith(429)
+      expect(mockRes.json).toHaveBeenCalledWith({
+        message: expectedError.message,
+      })
       expect(MockMailService.sendLoginOtp).not.toHaveBeenCalled()
     })
 

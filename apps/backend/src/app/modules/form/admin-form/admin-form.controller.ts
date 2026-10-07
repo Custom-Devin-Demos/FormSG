@@ -186,8 +186,8 @@ const createFormValidator = celebrate({
         metadata: clientMetadataValidator,
       })
       .required()
-      // Allow other form schema keys to be passed for form creation.
-      .unknown(true)
+      // Reject keys outside the allowlist above so admins cannot set
+      // server-controlled fields (e.g. payments_channel, permissionList).
       .custom((value, helpers) => verifyValidUnicodeString(value, helpers)),
   },
 })

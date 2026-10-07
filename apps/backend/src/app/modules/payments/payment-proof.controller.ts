@@ -1,6 +1,6 @@
 import { featureFlags } from 'formsg-shared/constants'
 import { StatusCodes } from 'http-status-codes'
-import { ResultAsync } from 'neverthrow'
+import { err, ok, ResultAsync } from 'neverthrow'
 
 import { createLoggerWithLabel } from '../../config/logger'
 import { ControllerHandler } from '../core/core.types'
@@ -10,6 +10,7 @@ import * as UserService from '../user/user.service'
 
 import { getPaymentLogMeta } from './payment.service.utils'
 import * as PaymentProofService from './payment-proof.service'
+import { PaymentNotFoundError } from './payments.errors'
 import * as PaymentService from './payments.service'
 
 const logger = createLoggerWithLabel(module)
@@ -20,6 +21,7 @@ const logger = createLoggerWithLabel(module)
  * @returns 200 if webhook is successfully processed
  * @returns 404 if the PaymentId is not found
  * @returns 404 if the FormId is not found
+ * @returns 404 if the PaymentId does not belong to the FormId
  * @returns 404 if payment.completedPayment?.receiptUrl is not found
  */
 export const downloadPaymentInvoice: ControllerHandler<{
@@ -43,6 +45,11 @@ export const downloadPaymentInvoice: ControllerHandler<{
       checkFormIsEncryptModeOrMultirespondent,
     ),
   ])
+    .andThen(([payment, populatedForm]) =>
+      String(payment.formId) === String(populatedForm._id)
+        ? ok([payment, populatedForm] as const)
+        : err(new PaymentNotFoundError()),
+    )
     .map(async ([payment, populatedForm]) => {
       // TODO [PDF-LAMBDA-GENERATION]: Remove setting of Growthbook targetting once pdf generation rollout is complete
       await UserService.getPopulatedUserById(populatedForm.admin).map(

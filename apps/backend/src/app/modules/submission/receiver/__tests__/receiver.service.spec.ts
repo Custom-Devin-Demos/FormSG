@@ -11,6 +11,7 @@ import { IncomingHttpHeaders } from 'http'
 import { omit, pick } from 'lodash'
 import path from 'path'
 
+import { fileSizeLimitBytes } from '../../submission.utils'
 import {
   InitialiseMultipartReceiverError,
   MultipartError,
@@ -67,6 +68,9 @@ describe('receiver.service', () => {
           limits: {
             fieldSize: 3 * MB,
             fileSize: 7 * MB,
+            files: 100,
+            fields: 1,
+            parts: 102,
           },
         })
         expect(result._unsafeUnwrap()).toEqual(MOCK_BUSBOY)
@@ -100,6 +104,9 @@ describe('receiver.service', () => {
           limits: {
             fieldSize: 3 * MB,
             fileSize: 7 * MB,
+            files: 100,
+            fields: 1,
+            parts: 102,
           },
         })
         expect(result._unsafeUnwrapErr()).toEqual(
@@ -122,6 +129,9 @@ describe('receiver.service', () => {
           limits: {
             fieldSize: 3 * MB,
             fileSize: 20 * MB,
+            files: 100,
+            fields: 1,
+            parts: 102,
           },
         })
         expect(result._unsafeUnwrap()).toEqual(MOCK_BUSBOY)
@@ -155,6 +165,9 @@ describe('receiver.service', () => {
           limits: {
             fieldSize: 3 * MB,
             fileSize: 20 * MB,
+            files: 100,
+            fields: 1,
+            parts: 102,
           },
         })
         expect(result._unsafeUnwrapErr()).toEqual(
@@ -165,6 +178,201 @@ describe('receiver.service', () => {
   })
 
   describe('configureMultipartReceiver', () => {
+    describe('streaming limits', () => {
+      const responseModes = [
+        FormResponseMode.Email,
+        FormResponseMode.Encrypt,
+        FormResponseMode.Multirespondent,
+      ]
+
+      const createReceiver = (
+        form: FormData,
+        responseMode = FormResponseMode.Email,
+      ) => {
+        MockBusboy.mockImplementationOnce(RealBusboy)
+        return EmailSubmissionReceiver.createMultipartReceiver(
+          form.getHeaders(),
+          responseMode,
+        )._unsafeUnwrap()
+      }
+
+      it.each(responseModes)(
+        'should abort %s submissions before EOF when aggregate file bytes exceed the limit',
+        async (responseMode) => {
+          const form = new FormData()
+          const receiver = createReceiver(form, responseMode)
+          const resultPromise =
+            EmailSubmissionReceiver.configureMultipartReceiver(
+              receiver,
+              responseMode,
+            )
+          const halfLimit = fileSizeLimitBytes(responseMode) / 2
+          const boundary = form.getBoundary()
+
+          receiver.write(
+            `--${boundary}\r\nContent-Disposition: form-data; name="body"\r\n\r\n{"responses":[]}\r\n` +
+              `--${boundary}\r\nContent-Disposition: form-data; name="one.txt"; filename="one"\r\n\r\n`,
+          )
+          receiver.write(Buffer.alloc(halfLimit))
+          receiver.write(
+            `\r\n--${boundary}\r\nContent-Disposition: form-data; name="two.txt"; filename="two"\r\n\r\n`,
+          )
+          receiver.write(Buffer.alloc(halfLimit + 1))
+
+          const result = await resultPromise
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          expect(result._unsafeUnwrapErr()).toEqual(new MultipartError())
+          expect(receiver.destroyed).toBeTrue()
+          expect(receiver.writableEnded).toBeFalse()
+        },
+      )
+
+      it.each(responseModes)(
+        'should accept %s submissions at exactly the aggregate limit',
+        async (responseMode) => {
+          const form = new FormData()
+          form.append('body', JSON.stringify({ responses: [] }))
+          const halfLimit = fileSizeLimitBytes(responseMode) / 2
+          form.append('one.txt', Buffer.alloc(halfLimit), 'one')
+          form.append('two.txt', Buffer.alloc(halfLimit), 'two')
+          const receiver = createReceiver(form, responseMode)
+          const resultPromise =
+            EmailSubmissionReceiver.configureMultipartReceiver(
+              receiver,
+              responseMode,
+            )
+          form.pipe(receiver)
+
+          expect((await resultPromise)._unsafeUnwrap()).toEqual({
+            responses: [],
+          })
+        },
+      )
+
+      it.each([100, 101])(
+        'should enforce the file count boundary for %i files',
+        async (fileCount) => {
+          const form = new FormData()
+          form.append('body', JSON.stringify({ responses: [] }))
+          for (let i = 0; i < fileCount; i++) {
+            form.append(`file-${i}.txt`, Buffer.alloc(0), `field-${i}`)
+          }
+          const receiver = createReceiver(form)
+          const resultPromise =
+            EmailSubmissionReceiver.configureMultipartReceiver(
+              receiver,
+              FormResponseMode.Email,
+            )
+          form.pipe(receiver)
+
+          const result = await resultPromise
+          expect(result.isOk()).toBe(fileCount === 100)
+          expect(receiver.destroyed).toBeTrue()
+        },
+      )
+
+      it.each(['body', 'unexpected'])(
+        'should reject an additional %s field',
+        async (fieldName) => {
+          const form = new FormData()
+          form.append('body', JSON.stringify({ responses: [] }))
+          form.append(fieldName, JSON.stringify({ responses: [] }))
+          const receiver = createReceiver(form)
+          const resultPromise =
+            EmailSubmissionReceiver.configureMultipartReceiver(
+              receiver,
+              FormResponseMode.Email,
+            )
+          form.pipe(receiver)
+
+          expect((await resultPromise)._unsafeUnwrapErr()).toEqual(
+            new MultipartError(),
+          )
+          expect(receiver.destroyed).toBeTrue()
+        },
+      )
+
+      it('should reject truncated fields even when they are not the body', async () => {
+        const form = new FormData()
+        form.append('unexpected', 'a'.repeat(3 * MB + 1))
+        const receiver = createReceiver(form)
+        const resultPromise =
+          EmailSubmissionReceiver.configureMultipartReceiver(
+            receiver,
+            FormResponseMode.Email,
+          )
+        form.pipe(receiver)
+
+        expect((await resultPromise)._unsafeUnwrapErr()).toEqual(
+          new MultipartError(),
+        )
+        expect(receiver.destroyed).toBeTrue()
+      })
+
+      it('should abort when Busboy emits a parts limit', async () => {
+        const form = new FormData()
+        form.append('body', JSON.stringify({ responses: [] }))
+        form.append('one.txt', Buffer.alloc(0), 'one')
+        const receiver = RealBusboy({
+          headers: form.getHeaders(),
+          limits: { parts: 2 },
+        })
+        const resultPromise =
+          EmailSubmissionReceiver.configureMultipartReceiver(
+            receiver,
+            FormResponseMode.Email,
+          )
+        form.pipe(receiver)
+
+        expect((await resultPromise)._unsafeUnwrapErr()).toEqual(
+          new MultipartError(),
+        )
+        expect(receiver.destroyed).toBeTrue()
+      })
+
+      it('should count and consume file parts without a filename', async () => {
+        const form = new FormData()
+        const receiver = createReceiver(form)
+        const resultPromise =
+          EmailSubmissionReceiver.configureMultipartReceiver(
+            receiver,
+            FormResponseMode.Email,
+          )
+        const boundary = form.getBoundary()
+        receiver.write(
+          `--${boundary}\r\nContent-Disposition: form-data; name="body"\r\n\r\n{"responses":[]}\r\n` +
+            `--${boundary}\r\nContent-Disposition: form-data; name="ignored"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+        )
+        receiver.write(Buffer.alloc(4 * MB))
+        receiver.write(
+          `\r\n--${boundary}\r\nContent-Disposition: form-data; name="one.txt"; filename="one"\r\n\r\n`,
+        )
+        receiver.write(Buffer.alloc(3 * MB + 1))
+
+        expect((await resultPromise)._unsafeUnwrapErr()).toEqual(
+          new MultipartError(),
+        )
+        expect(receiver.destroyed).toBeTrue()
+      })
+
+      it('should consume an empty filename without stalling valid submissions', async () => {
+        const form = new FormData()
+        const receiver = createReceiver(form)
+        const resultPromise =
+          EmailSubmissionReceiver.configureMultipartReceiver(
+            receiver,
+            FormResponseMode.Email,
+          )
+        const boundary = form.getBoundary()
+        receiver.end(
+          `--${boundary}\r\nContent-Disposition: form-data; name="ignored"; filename=""\r\nContent-Type: application/octet-stream\r\n\r\nignored\r\n` +
+            `--${boundary}\r\nContent-Disposition: form-data; name="body"\r\n\r\n{"responses":[]}\r\n--${boundary}--\r\n`,
+        )
+
+        expect((await resultPromise)._unsafeUnwrap()).toEqual({ responses: [] })
+      })
+    })
+
     it('should correctly process and return with utf8 file names', async () => {
       const mockResponse = pick(generateNewAttachmentResponse(), [
         '_id',
@@ -185,8 +393,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream.emit('data', VALID_UTF8_FILE_CONTENT)
@@ -228,8 +438,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream.emit('data', VALID_FILE_CONTENT_1)
@@ -275,8 +487,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream.emit('data', VALID_FILE_CONTENT_1)
@@ -336,8 +550,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream1.emit('data', VALID_FILE_CONTENT_1)
@@ -401,8 +617,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream1.emit('data', VALID_FILE_CONTENT_1)
@@ -458,8 +676,10 @@ describe('receiver.service', () => {
           fileSize: 7 * MB,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       fileStream.emit('data', Buffer.alloc(7 * MB + 1))
@@ -478,8 +698,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
 
       realBusboy.emit('error', new Error())
@@ -496,8 +718,10 @@ describe('receiver.service', () => {
           'content-type': `multipart/form-data; boundary=${form.getBoundary()}`,
         },
       })
-      const resultPromise =
-        EmailSubmissionReceiver.configureMultipartReceiver(realBusboy)
+      const resultPromise = EmailSubmissionReceiver.configureMultipartReceiver(
+        realBusboy,
+        FormResponseMode.Email,
+      )
       form.pipe(realBusboy)
       form.emit('end')
 

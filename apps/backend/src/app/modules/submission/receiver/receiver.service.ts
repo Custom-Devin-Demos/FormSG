@@ -7,7 +7,7 @@ import { err, ok, Result, ResultAsync } from 'neverthrow'
 
 import { IAttachmentInfo } from '../../../../types'
 import { createLoggerWithLabel } from '../../../config/logger'
-import { fileSizeLimit } from '../submission.utils'
+import { fileSizeLimitBytes } from '../submission.utils'
 
 import {
   InitialiseMultipartReceiverError,
@@ -23,6 +23,9 @@ import {
 } from './receiver.utils'
 
 const logger = createLoggerWithLabel(module)
+
+const MAX_MULTIPART_FILES = 100
+const MAX_MULTIPART_FIELDS = 1
 
 const hasContentTypeHeaders = (headers: IncomingHttpHeaders) => {
   return !!headers['content-type']
@@ -52,7 +55,11 @@ export const createMultipartReceiver = (
       headers,
       limits: {
         fieldSize: 3 * MB,
-        fileSize: fileSizeLimit(responseMode) * MB,
+        fileSize: fileSizeLimitBytes(responseMode),
+        files: MAX_MULTIPART_FILES,
+        fields: MAX_MULTIPART_FIELDS,
+        // Busboy emits partsLimit when the count reaches, not exceeds, this limit.
+        parts: MAX_MULTIPART_FILES + MAX_MULTIPART_FIELDS + 1,
       },
     })
     return ok(busboy)
@@ -76,6 +83,7 @@ export const createMultipartReceiver = (
  */
 export const configureMultipartReceiver = (
   busboy: Busboy.Busboy,
+  responseMode: FormResponseMode,
 ): ResultAsync<
   ParsedMultipartForm<FieldResponse[] | FieldResponsesV4>,
   MultipartError
@@ -87,10 +95,42 @@ export const configureMultipartReceiver = (
     ParsedMultipartForm<FieldResponse[] | FieldResponsesV4>
   >((resolve, reject) => {
     const attachments: IAttachmentInfo[] = []
-    let body: ParsedMultipartForm<FieldResponse[] | FieldResponsesV4>
+    const pendingBuffers = new Set<Buffer[]>()
+    const totalSizeLimit = fileSizeLimitBytes(responseMode)
+    let totalSize = 0
+    let failed = false
+    let body:
+      | ParsedMultipartForm<FieldResponse[] | FieldResponsesV4>
+      | undefined
+
+    const fail = (error: Error) => {
+      if (failed) return
+      failed = true
+      attachments.length = 0
+      for (const buffers of pendingBuffers) buffers.length = 0
+      pendingBuffers.clear()
+      body = undefined
+      reject(error)
+      // Avoid destroying Busboy reentrantly from its synchronous parser callbacks.
+      queueMicrotask(() => busboy.destroy(error))
+    }
+
+    const onLimit = () => {
+      if (failed) return
+      logger.error({
+        message: 'Limit event triggered by multipart receiver',
+        meta: logMeta,
+      })
+      fail(new MultipartContentLimitError())
+    }
 
     busboy
       .on('file', (fieldname, file, { filename }) => {
+        file.on('error', fail)
+        if (failed) {
+          file.resume()
+          return
+        }
         // Required to convert fieldname's encoding as busboy treats all
         // incoming fields as `latin1` encoding,
         // but this means some file languages gets incorrectly encoded
@@ -102,43 +142,42 @@ export const configureMultipartReceiver = (
             message: 'Error while attempting to parse form fieldname',
             meta: logMeta,
           })
-          return reject(new MultipartContentParsingError())
+          file.resume()
+          return fail(new MultipartContentParsingError())
         }
         const utf8Fieldname = Buffer.from(fieldname, 'latin1').toString('utf8')
-        if (filename) {
-          const buffers: Buffer[] = []
-          file.on('data', (data) => {
-            buffers.push(data)
-          })
+        const buffers: Buffer[] = []
+        pendingBuffers.add(buffers)
+        file.on('data', (data: Buffer) => {
+          if (failed) return
+          totalSize += data.length
+          if (totalSize > totalSizeLimit) return onLimit()
+          if (filename) buffers.push(data)
+        })
 
-          file.on('end', () => {
+        file.on('end', () => {
+          if (failed) return
+          if (filename) {
             const buffer = Buffer.concat(buffers)
             attachments.push({
               filename: utf8Fieldname,
               content: buffer,
               fieldId: filename,
             })
-            file.resume()
-          })
-          file.on('limit', () => {
-            logger.error({
-              message: 'Limit event triggered by multipart receiver',
-              meta: logMeta,
-            })
-            return reject(new MultipartContentLimitError())
-          })
-        }
+          }
+          buffers.length = 0
+          pendingBuffers.delete(buffers)
+        })
+        file.on('limit', onLimit)
       })
+      .on('filesLimit', onLimit)
+      .on('fieldsLimit', onLimit)
+      .on('partsLimit', onLimit)
       .on('field', (name, val, { valueTruncated }) => {
+        if (failed) return
+        if (valueTruncated) return onLimit()
         // on receiving body field, convert to JSON
         if (name === 'body') {
-          if (valueTruncated) {
-            logger.error({
-              message: 'Multipart value truncated',
-              meta: logMeta,
-            })
-            return reject(new MultipartContentLimitError())
-          }
           try {
             body = JSON.parse(val)
           } catch (error) {
@@ -148,19 +187,21 @@ export const configureMultipartReceiver = (
               meta: logMeta,
               error,
             })
-            return reject(new MultipartContentParsingError())
+            return fail(new MultipartContentParsingError())
           }
         }
       })
       .on('error', (error: Error) => {
+        if (failed) return
         logger.error({
           message: 'Generic multipart error',
           meta: logMeta,
           error,
         })
-        return reject(error)
+        return fail(error)
       })
       .on('close', () => {
+        if (failed) return
         if (body) {
           adaptMrfV3BodyToV4(body)
           handleDuplicatesInAttachments(attachments)

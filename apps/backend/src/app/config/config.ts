@@ -265,6 +265,11 @@ const config: Config = {
   port: basicVars.core.port,
   sessionSecret: basicVars.core.sessionSecret,
   otpLifeSpan: basicVars.core.otpLifeSpan,
+  // A purely numeric value is a hop count; anything else is a list of trusted
+  // proxy addresses/CIDRs, which express validates on startup.
+  trustProxy: /^\d+$/.test(basicVars.core.trustProxy)
+    ? Number(basicVars.core.trustProxy)
+    : basicVars.core.trustProxy,
   submissionsTopUp: basicVars.core.submissionsTopUp,
   formsTopUp: basicVars.core.formsTopUp,
   isGeneralMaintenance: basicVars.banner.isGeneralMaintenance,

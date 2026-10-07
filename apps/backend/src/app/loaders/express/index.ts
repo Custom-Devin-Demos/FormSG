@@ -36,8 +36,9 @@ const loadExpressApp = async (connection: Connection) => {
     switch (environment) {
       case 'production': {
         return function (app: Express) {
-          // Trust the load balancer that is in front of the server
-          app.set('trust proxy', true)
+          // Only trust the configured proxies in front of the server. Trusting
+          // all proxies would let clients spoof req.ip via X-Forwarded-For.
+          app.set('trust proxy', config.trustProxy)
           return app
         }
       }

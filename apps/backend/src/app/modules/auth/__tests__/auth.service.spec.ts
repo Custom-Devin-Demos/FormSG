@@ -17,7 +17,11 @@ import {
   PrivateFormError,
 } from '../../form/form.errors'
 import * as FormService from '../../form/form.service'
-import { InvalidDomainError, InvalidOtpError } from '../auth.errors'
+import {
+  InvalidDomainError,
+  InvalidOtpError,
+  OtpRequestCountExceededError,
+} from '../auth.errors'
 import * as AuthService from '../auth.service'
 
 jest.mock('../../form/form.service')
@@ -108,6 +112,66 @@ describe('auth.service', () => {
       })
       // Should have new token document inserted.
       await expect(TokenModel.countDocuments()).resolves.toEqual(1)
+    })
+
+    it('should return with OtpRequestCountExceededError when max OTP requests have been sent for the email', async () => {
+      // Arrange
+      await TokenModel.create({
+        email: VALID_EMAIL,
+        hashedOtp: 'some hashed otp',
+        expireAt: new Date(Date.now() + 60 * 1000),
+        numOtpSent: AuthService.MAX_OTP_REQUESTS,
+      })
+      const generateOtpSpy = jest.spyOn(OtpUtils, 'generateOtp')
+
+      // Act
+      const actualResult = await AuthService.createLoginOtp(VALID_EMAIL)
+
+      // Assert
+      expect(actualResult.isErr()).toBe(true)
+      expect(actualResult._unsafeUnwrapErr()).toBeInstanceOf(
+        OtpRequestCountExceededError,
+      )
+      expect(generateOtpSpy).not.toHaveBeenCalled()
+      const token = await TokenModel.findOne({ email: VALID_EMAIL })
+      expect(token?.numOtpSent).toEqual(AuthService.MAX_OTP_REQUESTS)
+    })
+
+    it('should create login otp successfully when OTP request count is below the max', async () => {
+      // Arrange
+      await TokenModel.create({
+        email: VALID_EMAIL,
+        hashedOtp: 'some hashed otp',
+        expireAt: new Date(Date.now() + 60 * 1000),
+        numOtpSent: AuthService.MAX_OTP_REQUESTS - 1,
+      })
+
+      // Act
+      const actualResult = await AuthService.createLoginOtp(VALID_EMAIL)
+
+      // Assert
+      expect(actualResult.isOk()).toBe(true)
+      const token = await TokenModel.findOne({ email: VALID_EMAIL })
+      expect(token?.numOtpSent).toEqual(AuthService.MAX_OTP_REQUESTS)
+    })
+
+    it('should reset OTP request count when the existing token has expired', async () => {
+      // Arrange
+      await TokenModel.create({
+        email: VALID_EMAIL,
+        hashedOtp: 'some hashed otp',
+        expireAt: new Date(Date.now() - 1000),
+        numOtpSent: AuthService.MAX_OTP_REQUESTS,
+      })
+
+      // Act
+      const actualResult = await AuthService.createLoginOtp(VALID_EMAIL)
+
+      // Assert
+      expect(actualResult.isOk()).toBe(true)
+      await expect(TokenModel.countDocuments()).resolves.toEqual(1)
+      const token = await TokenModel.findOne({ email: VALID_EMAIL })
+      expect(token?.numOtpSent).toEqual(1)
     })
 
     it('should return with InvalidDomainError when email is invalid', async () => {

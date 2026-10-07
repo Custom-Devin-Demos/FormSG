@@ -1,6 +1,8 @@
 import { promises as dns } from 'dns'
 import { isValidHttpsUrl } from 'formsg-shared/utils/url-validation'
+import https from 'https'
 import ipaddr from 'ipaddr.js'
+import type { LookupFunction } from 'net'
 
 import config from '../../config/config'
 import { createLoggerWithLabel } from '../../config/logger'
@@ -106,3 +108,56 @@ export const validateWebhookUrl = (webhookUrl: string): Promise<void> => {
       })
   })
 }
+
+/**
+ * DNS lookup for outgoing webhook connections. Resolves the hostname once,
+ * rejects if any resolved address is not public, and hands exactly those
+ * checked addresses to the socket. This pins the connection to validated IPs
+ * so a DNS rebinding attack cannot swap in an internal address between
+ * validateWebhookUrl and the actual request (SSRF TOCTOU).
+ */
+export const pinnedPublicLookup: LookupFunction = (
+  hostname,
+  options,
+  callback,
+) => {
+  dns
+    .lookup(hostname, { all: true, family: options.family })
+    .then((addresses) => {
+      if (!addresses.length) {
+        return callback(
+          new WebhookValidationError(
+            `${hostname} does not resolve to any IP address.`,
+          ) as NodeJS.ErrnoException,
+          '',
+        )
+      }
+      const privateIps = addresses
+        .map(({ address }) => address)
+        .filter((addr) => !isPublicAddress(addr))
+      if (privateIps.length) {
+        return callback(
+          new WebhookValidationError(
+            `${hostname} resolves to the following private IPs: ${privateIps.join(
+              ', ',
+            )}`,
+          ) as NodeJS.ErrnoException,
+          '',
+        )
+      }
+      if (options.all) {
+        return callback(null, addresses)
+      }
+      const [{ address, family }] = addresses
+      return callback(null, address, family)
+    })
+    .catch((error: NodeJS.ErrnoException) => callback(error, ''))
+}
+
+/**
+ * HTTPS agent for webhook requests that only connects to public IPs, using
+ * the same resolution that was checked.
+ */
+export const webhookHttpsAgent = new https.Agent({
+  lookup: pinnedPublicLookup,
+})

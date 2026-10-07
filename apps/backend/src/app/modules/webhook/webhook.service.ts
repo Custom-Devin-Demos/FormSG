@@ -38,7 +38,7 @@ import { WebhookProducer } from './webhook.producer'
 import { webhookStatsdClient } from './webhook.statsd-client'
 import { SnapshotRef } from './webhook.types'
 import { formatWebhookResponse, isSuccessfulResponse } from './webhook.utils'
-import { validateWebhookUrl } from './webhook.validation'
+import { validateWebhookUrl, webhookHttpsAgent } from './webhook.validation'
 
 const logger = createLoggerWithLabel(module)
 const Submission = getSubmissionModel(mongoose)
@@ -180,6 +180,10 @@ export const sendWebhook = (
             decompress: false,
             maxContentLength: WEBHOOK_MAX_CONTENT_LENGTH,
             maxRedirects: 0,
+            // Pin the connection to DNS results checked as public, so the
+            // hostname cannot be rebound to an internal IP after validation.
+            httpsAgent: webhookHttpsAgent,
+            proxy: false,
             // Timeout after 10 seconds to allow for cold starts in receiver,
             // e.g. Lambdas
             timeout: 10 * 1000,

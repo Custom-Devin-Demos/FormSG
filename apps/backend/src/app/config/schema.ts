@@ -376,6 +376,12 @@ export const optionalVarsSchema: Schema<IOptionalVarsSchema> = {
       default: 900000,
       env: 'OTP_LIFE_SPAN',
     },
+    trustProxy: {
+      doc: 'Express "trust proxy" setting applied in production, used to derive the client IP (and hence rate limit keys) from X-Forwarded-For. Either the number of trusted proxy hops in front of the app (e.g. 1 for a single load balancer), or a comma-separated list of trusted proxy IPs/CIDRs. Trusting all proxies is not supported as it lets clients spoof their IP.',
+      format: String,
+      default: '1',
+      env: 'TRUST_PROXY',
+    },
     submissionsTopUp: {
       doc: 'Number of submissions to top up submissions statistic by',
       format: 'int',

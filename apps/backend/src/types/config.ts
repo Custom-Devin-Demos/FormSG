@@ -107,6 +107,7 @@ export type Config = {
   sessionSecret: string
   chromiumBin: string
   otpLifeSpan: number
+  trustProxy: number | string
   bounceLifeSpan: number
   formsgSdkMode: PackageMode
   submissionsTopUp: number
@@ -202,6 +203,7 @@ export interface IOptionalVarsSchema {
   core: {
     port: number
     otpLifeSpan: number
+    trustProxy: string
     submissionsTopUp: number
     formsTopUp: number
     nodeEnv: Environment

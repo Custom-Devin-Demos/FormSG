@@ -1,15 +1,12 @@
 import type { FieldResponsesV4 } from '@opengovsg/formsg-sdk'
-import { Busboy } from 'busboy'
 import { NextFunction, Request, Response } from 'express-serve-static-core'
 import { FieldResponse, FormResponseMode } from 'formsg-shared/types'
-import { Result } from 'neverthrow'
 
 import { createLoggerWithLabel } from '../../../config/logger'
 import { createReqMeta } from '../../../utils/request'
 import { ControllerHandler } from '../../core/core.types'
 import { sendRouteError } from '../submission.utils'
 
-import { InitialiseMultipartReceiverError } from './receiver.errors'
 import * as SubmissionReceiver from './receiver.service'
 import { mapRouteError } from './receiver.utils'
 
@@ -30,15 +27,7 @@ export const receiveEmailSubmission: ControllerHandler<
   { message: string },
   { responses: FieldResponse[] }
 > = async (req, res, next) => {
-  return receiveSubmission(
-    req,
-    res,
-    next,
-    SubmissionReceiver.createMultipartReceiver(
-      req.headers,
-      FormResponseMode.Email,
-    ),
-  )
+  return receiveSubmission(req, res, next, FormResponseMode.Email)
 }
 
 /**
@@ -56,15 +45,7 @@ export const receiveStorageSubmission: ControllerHandler<
   { message: string },
   { responses: FieldResponse[] }
 > = async (req, res, next) => {
-  return receiveSubmission(
-    req,
-    res,
-    next,
-    SubmissionReceiver.createMultipartReceiver(
-      req.headers,
-      FormResponseMode.Encrypt,
-    ),
-  )
+  return receiveSubmission(req, res, next, FormResponseMode.Encrypt)
 }
 
 /**
@@ -82,15 +63,7 @@ export const receiveMultirespondentSubmission: ControllerHandler<
   { message: string },
   { responses: FieldResponsesV4 }
 > = async (req, res, next) => {
-  return receiveSubmission(
-    req,
-    res,
-    next,
-    SubmissionReceiver.createMultipartReceiver(
-      req.headers,
-      FormResponseMode.Multirespondent,
-    ),
-  )
+  return receiveSubmission(req, res, next, FormResponseMode.Multirespondent)
 }
 
 const receiveSubmission = async (
@@ -103,15 +76,18 @@ const receiveSubmission = async (
   >,
   res: Response<{ message: string }, Record<string, unknown>, number>,
   next: NextFunction,
-  multipartReceiver: Result<Busboy, InitialiseMultipartReceiverError>,
+  responseMode: FormResponseMode,
 ) => {
   const logMeta = {
     action: 'receiveSubmission',
     ...createReqMeta(req),
   }
-  return multipartReceiver
+  return SubmissionReceiver.createMultipartReceiver(req.headers, responseMode)
     .asyncAndThen((receiver) => {
-      const result = SubmissionReceiver.configureMultipartReceiver(receiver)
+      const result = SubmissionReceiver.configureMultipartReceiver(
+        receiver,
+        responseMode,
+      )
       req.pipe(receiver)
       return result
     })

@@ -129,6 +129,8 @@ describe('webhook.service', () => {
       decompress: false,
       maxContentLength: WEBHOOK_MAX_CONTENT_LENGTH,
       maxRedirects: 0,
+      httpsAgent: MockWebhookValidationModule.webhookHttpsAgent,
+      proxy: false,
       timeout: 10000,
     }
   })

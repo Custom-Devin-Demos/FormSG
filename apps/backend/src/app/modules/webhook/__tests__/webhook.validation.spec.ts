@@ -2,7 +2,10 @@ import { promises as dns } from 'dns'
 
 import config from 'src/app/config/config'
 import { WebhookValidationError } from 'src/app/modules/webhook/webhook.errors'
-import { validateWebhookUrl } from 'src/app/modules/webhook/webhook.validation'
+import {
+  pinnedPublicLookup,
+  validateWebhookUrl,
+} from 'src/app/modules/webhook/webhook.validation'
 
 jest.mock('dns', () => ({
   promises: {
@@ -157,5 +160,79 @@ describe('Webhook URL validation', () => {
     await expect(
       validateWebhookUrl(`${MOCK_APP_SIMILAR_URL}`),
     ).resolves.toEqual(undefined)
+  })
+})
+
+describe('pinnedPublicLookup', () => {
+  const runLookup = (
+    options: { all?: boolean; family?: number } = {},
+  ): Promise<{ error: unknown; address: unknown; family?: number }> =>
+    new Promise((resolve) => {
+      pinnedPublicLookup(
+        'rebind.example',
+        options,
+        (error: unknown, address: unknown, family?: number) =>
+          resolve({ error, address, family }),
+      )
+    })
+
+  it('should return the single checked public address', async () => {
+    mockLookup({ address: '1.1.1.1', family: 4 })
+    await expect(runLookup()).resolves.toEqual({
+      error: null,
+      address: '1.1.1.1',
+      family: 4,
+    })
+    expect(MockDns.lookup).toHaveBeenLastCalledWith('rebind.example', {
+      all: true,
+      family: undefined,
+    })
+  })
+
+  it('should return all checked public addresses when all is requested', async () => {
+    const addresses = [
+      { address: '1.1.1.1', family: 4 as const },
+      { address: '2606:4700:4700::1111', family: 6 as const },
+    ]
+    mockLookup(...addresses)
+    await expect(runLookup({ all: true })).resolves.toEqual({
+      error: null,
+      address: addresses,
+      family: undefined,
+    })
+  })
+
+  it('should refuse to connect if the hostname now resolves to a private IP', async () => {
+    // Simulates DNS rebinding: validation saw a public IP, connect-time
+    // resolution returns the metadata endpoint.
+    mockLookup({ address: '169.254.169.254', family: 4 })
+    const { error } = await runLookup()
+    expect(error).toStrictEqual(
+      new WebhookValidationError(
+        'rebind.example resolves to the following private IPs: 169.254.169.254',
+      ),
+    )
+  })
+
+  it('should refuse to connect if any resolved address is private', async () => {
+    mockLookup(
+      { address: '1.1.1.1', family: 4 },
+      { address: '::ffff:10.0.0.1', family: 6 },
+    )
+    const { error } = await runLookup({ all: true })
+    expect(error).toBeInstanceOf(WebhookValidationError)
+  })
+
+  it('should refuse to connect if the hostname resolves to nothing', async () => {
+    mockLookup()
+    const { error } = await runLookup()
+    expect(error).toBeInstanceOf(WebhookValidationError)
+  })
+
+  it('should propagate DNS errors', async () => {
+    const dnsError = new Error('ENOTFOUND')
+    MockDns.lookup.mockRejectedValueOnce(dnsError)
+    const { error } = await runLookup()
+    expect(error).toBe(dnsError)
   })
 })

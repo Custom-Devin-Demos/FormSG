@@ -162,6 +162,12 @@ export class AttachmentSizeLimitExceededError extends ApplicationError {
   }
 }
 
+export class InvalidAttachmentSizeError extends ApplicationError {
+  constructor(message = 'Attachment size must be a positive integer.') {
+    super(message, undefined, ErrorCodes.SUBMISSION_INVALID_ATTACHMENT_SIZE)
+  }
+}
+
 export class FeatureDisabledError extends ApplicationError {
   constructor(message = 'This feature is disabled.') {
     super(message, undefined, ErrorCodes.SUBMISSION_FEATURE_DISABLED)

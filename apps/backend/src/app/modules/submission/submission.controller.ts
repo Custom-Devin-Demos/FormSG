@@ -23,6 +23,8 @@ import { getFormAfterPermissionChecks } from '../auth/auth.service'
 import { DatabaseError } from '../core/core.errors'
 import { ControllerHandler } from '../core/core.types'
 import { PermissionLevel } from '../form/admin-form/admin-form.types'
+import { assertFormAvailable } from '../form/admin-form/admin-form.utils'
+import * as FormService from '../form/form.service'
 import { PaymentNotFoundError } from '../payments/payments.errors'
 import { getPopulatedUserById } from '../user/user.service'
 
@@ -46,6 +48,7 @@ import {
   fileSizeLimit,
   fileSizeLimitBytes,
   mapRouteError,
+  maxAttachmentCount,
 } from './submission.utils'
 
 const logger = createLoggerWithLabel(module)
@@ -453,7 +456,10 @@ export const handleStreamEncryptedResponses = [
  * Handler for POST /:formId/submissions/get-s3-presigned-post-data
  * Used by handleGetS3PresignedPostData after joi validation
  * @returns 200 with array of presigned post data
- * @returns 400 if ids are invalid or total file size exceeds 20MB
+ * @returns 400 if ids are invalid, sizes are not positive integers or total file size exceeds 20MB
+ * @returns 400 if form is not an encrypt or multirespondent form
+ * @returns 404 if form cannot be found, or is a private encrypt mode form
+ * @returns 410 if form is archived
  * @returns 500 if presigned post data cannot be retrieved or any other errors occur
  * Exported for testing
  */
@@ -469,7 +475,22 @@ export const getS3PresignedPostData: ControllerHandler<
     ...createReqMeta(req),
   }
 
-  return getQuarantinePresignedPostData(req.body)
+  return FormService.retrieveFormKeysById(formId, [
+    'status',
+    'responseMode',
+    'closeAt',
+    'inactiveMessage',
+    'title',
+  ])
+    .andThen(checkFormIsEncryptModeOrMultirespondent)
+    .andThen((form) =>
+      // Subsequent multirespondent form respondents may respond to non-public
+      // forms, so only reject archived multirespondent forms.
+      form.responseMode === FormResponseMode.Multirespondent
+        ? assertFormAvailable(form)
+        : FormService.isFormPublic(form),
+    )
+    .andThen(() => getQuarantinePresignedPostData(req.body))
     .map((presignedUrls) => {
       logger.info({
         message: 'Successfully retrieved quarantine presigned post data.',
@@ -517,10 +538,13 @@ export const handleGetS3PresignedPostData = [
             .regex(/^[0-9a-fA-F]{24}$/) // IDs should be MongoDB ObjectIDs
             .required(),
           size: Joi.number()
+            .integer()
+            .min(1)
             .max(fileSizeLimitBytes(FormResponseMode.Encrypt)) // Max attachment size is 20MB
             .required(),
         }),
       )
+      .max(maxAttachmentCount(FormResponseMode.Encrypt))
       .unique('id') // IDs of each array item should be unique
       .custom(validateFileSizeSum, 'Custom validation for total file size') // Custom validation to check for total file size
       .messages({

@@ -9,6 +9,7 @@ import {
 import { FIELDS_TO_REJECT } from 'formsg-shared/constants/field/basic'
 import { MYINFO_ATTRIBUTE_MAP } from 'formsg-shared/constants/field/myinfo'
 import {
+  AttachmentSize,
   BasicField,
   FormAuthType,
   FormField,
@@ -147,6 +148,7 @@ import {
   GuardDutyMaliciousFileDetectedError,
   GuardDutyParseVirusScannerLambdaPayloadError,
   GuardDutyVirusScanFailedError,
+  InvalidAttachmentSizeError,
   InvalidEncodingError,
   InvalidFieldIdError,
   InvalidFileExtensionError,
@@ -448,6 +450,7 @@ const errorMapper: MapRouteError = (
       }
     case SubmissionFailedError:
     case InvalidFieldIdError:
+    case InvalidAttachmentSizeError:
     case InvalidFileKeyError:
     case GuardDutyInvalidFileKeyError:
     case GuardDutyFileAlreadyScannedError:
@@ -778,6 +781,18 @@ export const getInvalidFileExtensions = (
 
 export const fileSizeLimitBytes = (responseMode: FormResponseMode) => {
   return MB_MULTIPLIER * fileSizeLimit(responseMode)
+}
+
+/**
+ * Maximum number of attachment fields a form can have, as every attachment
+ * field is at least the smallest AttachmentSize and all attachment fields
+ * share the form's total attachment size limit.
+ */
+export const maxAttachmentCount = (responseMode: FormResponseMode) => {
+  const smallestAttachmentSizeMb = Math.min(
+    ...Object.values(AttachmentSize).map(Number),
+  )
+  return Math.floor(fileSizeLimit(responseMode) / smallestAttachmentSizeMb)
 }
 
 /**

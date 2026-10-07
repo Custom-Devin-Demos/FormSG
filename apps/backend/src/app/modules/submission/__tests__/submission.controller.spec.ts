@@ -5,6 +5,7 @@ import {
   AttachmentPresignedPostDataMapType,
   AttachmentSizeMapType,
   FormResponseMode,
+  FormStatus,
   SubmissionId,
   SubmissionMetadata,
   SubmissionPaymentDto,
@@ -22,6 +23,7 @@ import {
   FormDeletedError,
   FormNotFoundError,
 } from 'src/app/modules/form/form.errors'
+import * as FormService from 'src/app/modules/form/form.service'
 import { PaymentNotFoundError } from 'src/app/modules/payments/payments.errors'
 import { MissingUserError } from 'src/app/modules/user/user.errors'
 import * as UserService from 'src/app/modules/user/user.service'
@@ -1336,6 +1338,58 @@ describe('submission.controller', () => {
       body: [
         { id: new ObjectId().toHexString(), size: 500 },
       ] as unknown as AttachmentSizeMapType[],
+    })
+
+    const MOCK_PUBLIC_ENCRYPT_FORM = {
+      _id: MOCK_FORM_ID,
+      status: FormStatus.Public,
+      responseMode: FormResponseMode.Encrypt,
+    } as unknown as IPopulatedForm
+
+    beforeEach(() => {
+      jest
+        .spyOn(FormService, 'retrieveFormKeysById')
+        .mockReturnValue(okAsync(MOCK_PUBLIC_ENCRYPT_FORM))
+      jest
+        .spyOn(SubmissionsUtils, 'checkFormIsEncryptModeOrMultirespondent')
+        .mockImplementation((form) => ok(form as IPopulatedEncryptedForm))
+    })
+
+    it('should return 404 without creating presigned post data if form cannot be found', async () => {
+      // Arrange
+      jest
+        .spyOn(FormService, 'retrieveFormKeysById')
+        .mockReturnValueOnce(errAsync(new FormNotFoundError()))
+      const mockRes = expressHandler.mockResponse()
+
+      // Act
+      await getS3PresignedPostData(MOCK_REQ, mockRes, jest.fn())
+
+      // Assert
+      expect(mockRes.status).toHaveBeenCalledWith(StatusCodes.NOT_FOUND)
+      expect(
+        MockSubService.getQuarantinePresignedPostData,
+      ).not.toHaveBeenCalled()
+    })
+
+    it('should return 404 without creating presigned post data if encrypt mode form is private', async () => {
+      // Arrange
+      jest.spyOn(FormService, 'retrieveFormKeysById').mockReturnValueOnce(
+        okAsync({
+          ...MOCK_PUBLIC_ENCRYPT_FORM,
+          status: FormStatus.Private,
+        } as unknown as IPopulatedForm),
+      )
+      const mockRes = expressHandler.mockResponse()
+
+      // Act
+      await getS3PresignedPostData(MOCK_REQ, mockRes, jest.fn())
+
+      // Assert
+      expect(mockRes.status).toHaveBeenCalledWith(StatusCodes.NOT_FOUND)
+      expect(
+        MockSubService.getQuarantinePresignedPostData,
+      ).not.toHaveBeenCalled()
     })
 
     it('should return 500 if getQuarantinePresignedPostData returns errAsync(CreatePresignedPostError)', async () => {

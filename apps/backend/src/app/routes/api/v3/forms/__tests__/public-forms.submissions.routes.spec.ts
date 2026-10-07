@@ -695,6 +695,141 @@ describe('public-form.submissions.routes', () => {
       })
     })
 
+    it.each([
+      ['negative', -20000000, 'must be greater than or equal to 1'],
+      ['zero', 0, 'must be greater than or equal to 1'],
+      ['not an integer', 1.5, 'must be an integer'],
+    ])(
+      'should return 400 if size of a file is %s',
+      async (_, size, expectedMessage) => {
+        const { form } = await dbHandler.insertEncryptForm({
+          formOptions: { status: FormStatus.Public },
+        })
+        const createPresignedPostSpy = jest.spyOn(
+          s3Operations,
+          'createPresignedPost',
+        )
+
+        const response = await request
+          .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+          .send([{ ...FILE_MAP_1, size }, FILE_MAP_2])
+
+        expect(response.status).toBe(400)
+        expect(response.body.validation.body).toEqual(
+          expect.objectContaining({
+            keys: ['0.size'],
+            message: `"[0].size" ${expectedMessage}`,
+          }),
+        )
+        expect(createPresignedPostSpy).not.toHaveBeenCalled()
+      },
+    )
+
+    it('should return 400 if a negative size is used to offset the total file size on the deprecated storage route', async () => {
+      const { form } = await dbHandler.insertEncryptForm({
+        formOptions: { status: FormStatus.Public },
+      })
+      const OFFSET_PAYLOAD = [
+        { id: new mongoose.Types.ObjectId().toHexString(), size: -40000000 },
+        { id: new mongoose.Types.ObjectId().toHexString(), size: 20000000 },
+        { id: new mongoose.Types.ObjectId().toHexString(), size: 20000000 },
+      ]
+
+      const response = await request
+        .post(
+          `/forms/${form._id}/submissions/storage/get-s3-presigned-post-data`,
+        )
+        .send(OFFSET_PAYLOAD)
+
+      expect(response.status).toBe(400)
+      expect(response.body.validation.body).toEqual(
+        expect.objectContaining({
+          keys: ['0.size'],
+          message: '"[0].size" must be greater than or equal to 1',
+        }),
+      )
+    })
+
+    it('should return 400 if there are more items than the maximum number of attachment fields', async () => {
+      const { form } = await dbHandler.insertEncryptForm({
+        formOptions: { status: FormStatus.Public },
+      })
+      const TOO_MANY_ITEMS_PAYLOAD = Array.from({ length: 21 }, () => ({
+        id: new mongoose.Types.ObjectId().toHexString(),
+        size: 1,
+      }))
+
+      const response = await request
+        .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+        .send(TOO_MANY_ITEMS_PAYLOAD)
+
+      expect(response.status).toBe(400)
+      expect(response.body.validation.body).toEqual(
+        expect.objectContaining({
+          message: '"value" must contain less than or equal to 20 items',
+        }),
+      )
+    })
+
+    it('should return 404 if form does not exist', async () => {
+      const response = await request
+        .post(
+          `/forms/${new mongoose.Types.ObjectId().toHexString()}/submissions/get-s3-presigned-post-data`,
+        )
+        .send(VALID_PAYLOAD)
+
+      expect(response.status).toBe(404)
+    })
+
+    it('should return 404 if encrypt mode form is private', async () => {
+      const { form } = await dbHandler.insertEncryptForm({
+        formOptions: { status: FormStatus.Private },
+      })
+
+      const response = await request
+        .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+        .send(VALID_PAYLOAD)
+
+      expect(response.status).toBe(404)
+    })
+
+    it('should return 410 if form is archived', async () => {
+      const { form } = await dbHandler.insertMultirespondentForm({
+        formOptions: { status: FormStatus.Archived },
+      })
+
+      const response = await request
+        .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+        .send(VALID_PAYLOAD)
+
+      expect(response.status).toBe(410)
+    })
+
+    it('should return 400 if form is an email mode form', async () => {
+      const { form } = await dbHandler.insertEmailForm({
+        formOptions: { status: FormStatus.Public },
+      })
+
+      const response = await request
+        .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+        .send(VALID_PAYLOAD)
+
+      expect(response.status).toBe(400)
+    })
+
+    it('should return 200 for a private multirespondent form so subsequent respondents can upload attachments', async () => {
+      const { form } = await dbHandler.insertMultirespondentForm({
+        formOptions: { status: FormStatus.Private },
+      })
+
+      const response = await request
+        .post(`/forms/${form._id}/submissions/get-s3-presigned-post-data`)
+        .send(VALID_PAYLOAD)
+
+      expect(response.status).toBe(200)
+      expect(response.body).toHaveLength(VALID_PAYLOAD.length)
+    })
+
     it('should return 500 if creating of presigned post data fails', async () => {
       const { form } = await dbHandler.insertEncryptForm({
         formOptions: {

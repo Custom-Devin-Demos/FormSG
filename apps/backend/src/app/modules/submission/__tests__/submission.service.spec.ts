@@ -59,6 +59,7 @@ import {
   DownloadCleanFileFailedError,
   GuardDutyFileAlreadyScannedError,
   GuardDutyInvalidFileKeyError,
+  InvalidAttachmentSizeError,
   InvalidFieldIdError,
   InvalidFileExtensionError,
   InvalidFileKeyError,
@@ -2827,6 +2828,50 @@ describe('submission.service', () => {
       expect(actualResult.isErr()).toEqual(true)
       expect(actualResult._unsafeUnwrapErr()).toEqual(
         new AttachmentSizeLimitExceededError(),
+      )
+    })
+
+    it.each([
+      ['negative', -1],
+      ['zero', 0],
+      ['non-integer', 1.5],
+    ])(
+      'should return InvalidAttachmentSizeError when an attachment size is %s',
+      async (_, size) => {
+        // Arrange
+        const awsSpy = jest.spyOn(s3Operations, 'createPresignedPost')
+
+        // Act
+        const actualResult = await getQuarantinePresignedPostData([
+          { id: fieldId1, size: 1 },
+          { id: fieldId2, size },
+        ])
+
+        // Assert
+        expect(actualResult.isErr()).toEqual(true)
+        expect(awsSpy).not.toHaveBeenCalled()
+        expect(actualResult._unsafeUnwrapErr()).toEqual(
+          new InvalidAttachmentSizeError(),
+        )
+      },
+    )
+
+    it('should return InvalidAttachmentSizeError when a negative size offsets the total attachment size', async () => {
+      // Arrange
+      const awsSpy = jest.spyOn(s3Operations, 'createPresignedPost')
+
+      // Act
+      const actualResult = await getQuarantinePresignedPostData([
+        { id: fieldId1, size: -20000000 },
+        { id: fieldId2, size: 20000000 },
+        { id: new mongoose.Types.ObjectId().toHexString(), size: 20000000 },
+      ])
+
+      // Assert
+      expect(actualResult.isErr()).toEqual(true)
+      expect(awsSpy).not.toHaveBeenCalled()
+      expect(actualResult._unsafeUnwrapErr()).toEqual(
+        new InvalidAttachmentSizeError(),
       )
     })
   })

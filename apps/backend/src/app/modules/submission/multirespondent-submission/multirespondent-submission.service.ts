@@ -349,8 +349,10 @@ const sendNextStepEmail = ({
 }
 
 export const getPendingStepRecipientEmailsFromSubmittedStepsMeta = ({
+  formId,
   submissionId,
 }: {
+  formId: string
   submissionId: string
 }): ResultAsync<
   { recipientEmails: string[]; reminderStepNumber: number },
@@ -360,11 +362,21 @@ export const getPendingStepRecipientEmailsFromSubmittedStepsMeta = ({
   | MrfReminderRecipientEmailsEmptyError
 > => {
   return getMultirespondentSubmission(submissionId).andThen(
-    ({ workflow, submittedSteps }) => {
+    ({ form, workflow, submittedSteps }) => {
       const logMeta = {
         action: 'getPendingStepRecipientEmailsFromSubmittedStepsMeta',
+        formId,
         submissionId,
         submittedSteps,
+      }
+
+      if (String(form) !== String(formId)) {
+        logger.warn({
+          message:
+            'Submission does not belong to form when sending mrf next step submission reminder email',
+          meta: logMeta,
+        })
+        return errAsync(new SubmissionNotFoundError())
       }
 
       const isPending =

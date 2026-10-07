@@ -46,9 +46,15 @@ it('returns null when a V4 webhook attachment belongs to another submission', as
   const result = cryptoV4.decryptWithAttachments(keys.secretKey, {
     ...encrypted,
     version: 4,
-    attachmentDownloadUrls: { attachment: 'https://files.example/evidence' },
+    attachmentDownloadUrls: {
+      attachment:
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    },
   })
-  mockAxios.mockResponseFor('https://files.example/evidence', download)
+  mockAxios.mockResponseFor(
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    download
+  )
 
   // Assert: attachment decryption failure returns null for the whole webhook.
   await expect(result).resolves.toBeNull()
@@ -81,15 +87,19 @@ it('returns null for the V4 webhook when any attachment cannot be decrypted', as
     ...encrypted,
     version: 4,
     attachmentDownloadUrls: {
-      attachment: 'https://files.example/evidence',
-      other: 'https://files.example/other',
+      attachment:
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+      other: 'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/other',
     },
   })
   mockAxios.mockResponseFor(
-    'https://files.example/evidence',
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
     successfulDownload
   )
-  mockAxios.mockResponseFor('https://files.example/other', failedDownload)
+  mockAxios.mockResponseFor(
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/other',
+    failedDownload
+  )
 
   // Assert: attachment decryption failure returns null for the whole webhook.
   await expect(result).resolves.toBeNull()
@@ -146,12 +156,19 @@ it('returns V4 webhook attachments with their field IDs, filenames and file cont
     ...encrypted,
     version: 4,
     attachmentDownloadUrls: {
-      attachment: 'https://files.example/evidence',
-      other: 'https://files.example/other',
+      attachment:
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+      other: 'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/other',
     },
   })
-  mockAxios.mockResponseFor('https://files.example/other', otherDownload)
-  mockAxios.mockResponseFor('https://files.example/evidence', evidenceDownload)
+  mockAxios.mockResponseFor(
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/other',
+    otherDownload
+  )
+  mockAxios.mockResponseFor(
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    evidenceDownload
+  )
 
   // Assert: reversed download completion preserves each field's filename and file contents.
   expect((await result)?.attachments).toEqual({
@@ -171,7 +188,10 @@ it('decrypts V4 webhook responses and attachments with the form secret key', asy
   const result = cryptoV4.decryptWithAttachments(keys.secretKey, {
     ...encrypted,
     version: 4,
-    attachmentDownloadUrls: { attachment: 'https://files.example/evidence' },
+    attachmentDownloadUrls: {
+      attachment:
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    },
   })
   mockAxios.mockResponse({
     data: {
@@ -213,7 +233,7 @@ it.each([
     )
     const attachmentDownloadUrls = {
       [scenario === 'unknown attachment field ID' ? 'unknown' : 'attachment']:
-        'https://files.example/evidence',
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
     }
     const secretKey =
       scenario === 'incorrect form secret key'
@@ -276,9 +296,120 @@ it('returns null when a V4 webhook attachment response has no filename', async (
   const result = cryptoV4.decryptWithAttachments(keys.secretKey, {
     ...encrypted,
     version: 4,
-    attachmentDownloadUrls: { attachment: 'https://files.example/evidence' },
+    attachmentDownloadUrls: {
+      attachment:
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    },
   })
 
   // Assert: an attachment without a filename makes the whole result null.
   await expect(result).resolves.toBeNull()
+})
+
+describe('attachment download URL validation', () => {
+  const decryptWithUrl = async (url: string, sdk: CryptoV4 = cryptoV4) => {
+    const keys = sdk.generate()
+    const encrypted = sdk.encrypt(responses, keys.publicKey)
+    return sdk.decryptWithAttachments(keys.secretKey, {
+      ...encrypted,
+      version: 4,
+      attachmentDownloadUrls: { attachment: url },
+    })
+  }
+
+  it.each([
+    'http://formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    'http://169.254.169.254/latest/meta-data/',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://localhost/evidence',
+    'https://files.example/evidence',
+    'https://s3.amazonaws.com.attacker.example/evidence',
+    'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com:8443/evidence',
+    'https://user:pass@formsg-attachments.s3.ap-southeast-1.amazonaws.com/evidence',
+    'file:///etc/passwd',
+    'not a url',
+  ])('returns null without downloading from %s', async (url) => {
+    // Act: decrypt a webhook whose attachment URL is not an allowed S3 https URL.
+    const result = await decryptWithUrl(url)
+
+    // Assert: no request is made and the whole result is null.
+    expect(result).toBeNull()
+    expect(mockAxios.get).not.toHaveBeenCalled()
+  })
+
+  it('downloads with redirects disabled and timeout and size limits', async () => {
+    // Prepare: an allowed S3 URL.
+    const url = 'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/a'
+
+    // Act: decrypt the webhook and fail the download.
+    const result = decryptWithUrl(url)
+    mockAxios.mockError(new Error('unavailable'))
+    await result
+
+    // Assert: the request is bounded and does not follow redirects.
+    expect(mockAxios.get).toHaveBeenCalledWith(url, {
+      responseType: 'json',
+      maxRedirects: 0,
+      timeout: 30000,
+      maxContentLength: 32 * 1024 * 1024,
+    })
+  })
+
+  it('only downloads from caller-configured hosts when allowedHosts is set', async () => {
+    // Prepare: an SDK restricted to a custom host and its subdomains.
+    const sdk = new CryptoV4({
+      attachmentDownloadOptions: {
+        allowedHosts: ['files.example', '*.cdn.example'],
+        timeout: 1000,
+        maxContentLength: 2048,
+      },
+    })
+
+    // Act + Assert: S3 hosts are no longer allowed by default.
+    await expect(
+      decryptWithUrl(
+        'https://formsg-attachments.s3.ap-southeast-1.amazonaws.com/a',
+        sdk
+      )
+    ).resolves.toBeNull()
+    expect(mockAxios.get).not.toHaveBeenCalled()
+
+    // Act: decrypt webhooks pointing at allowed custom hosts.
+    const exact = decryptWithUrl('https://files.example/a', sdk)
+    const wildcard = decryptWithUrl('https://eu.cdn.example/a', sdk)
+    mockAxios.mockError(new Error('unavailable'))
+    mockAxios.mockError(new Error('unavailable'))
+    await Promise.all([exact, wildcard])
+
+    // Assert: both are fetched with the configured limits.
+    const config = {
+      responseType: 'json',
+      maxRedirects: 0,
+      timeout: 1000,
+      maxContentLength: 2048,
+    }
+    expect(mockAxios.get).toHaveBeenCalledWith(
+      'https://files.example/a',
+      config
+    )
+    expect(mockAxios.get).toHaveBeenCalledWith(
+      'https://eu.cdn.example/a',
+      config
+    )
+  })
+
+  it.each([
+    'https://formsg-attachments.s3.amazonaws.com/a',
+    'https://s3.ap-southeast-1.amazonaws.com/formsg-attachments/a',
+    'https://formsg-attachments.s3-ap-southeast-1.amazonaws.com/a',
+    'https://formsg-attachments.s3.dualstack.us-gov-west-1.amazonaws.com/a',
+  ])('downloads from S3 host %s by default', async (url) => {
+    // Act: decrypt the webhook and fail the download.
+    const result = decryptWithUrl(url)
+    mockAxios.mockError(new Error('unavailable'))
+    await result
+
+    // Assert: the S3 URL is fetched.
+    expect(mockAxios.get).toHaveBeenCalledWith(url, expect.anything())
+  })
 })

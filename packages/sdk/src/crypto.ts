@@ -10,6 +10,7 @@ import { determineIsFormFields } from './util/validate'
 import CryptoBase from './crypto-base'
 import { MissingPublicKeyError } from './errors'
 import {
+  AttachmentDownloadOptions,
   DecryptedContent,
   DecryptedContentAndAttachments,
   DecryptParams,
@@ -20,8 +21,14 @@ import {
 export default class Crypto extends CryptoBase {
   signingPublicKey?: string
 
-  constructor({ signingPublicKey }: { signingPublicKey?: string } = {}) {
-    super()
+  constructor({
+    signingPublicKey,
+    attachmentDownloadOptions,
+  }: {
+    signingPublicKey?: string
+    attachmentDownloadOptions?: AttachmentDownloadOptions
+  } = {}) {
+    super(attachmentDownloadOptions)
     this.signingPublicKey = signingPublicKey
   }
 

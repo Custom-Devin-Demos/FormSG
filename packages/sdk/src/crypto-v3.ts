@@ -15,6 +15,7 @@ import { adaptV3ToV4, deriveQuestionFromMeta } from './adapt-v3-to-v4'
 import CryptoBase from './crypto-base'
 import { MissingPublicKeyError } from './errors'
 import {
+  AttachmentDownloadOptions,
   DecryptedContentV3,
   DecryptParams,
   DecryptParamsV3,
@@ -69,8 +70,14 @@ function backfillMissingQuestions(
 export default class CryptoV3 extends CryptoBase {
   signingPublicKey?: string
 
-  constructor({ signingPublicKey }: { signingPublicKey?: string } = {}) {
-    super()
+  constructor({
+    signingPublicKey,
+    attachmentDownloadOptions,
+  }: {
+    signingPublicKey?: string
+    attachmentDownloadOptions?: AttachmentDownloadOptions
+  } = {}) {
+    super(attachmentDownloadOptions)
     this.signingPublicKey = signingPublicKey
   }
 

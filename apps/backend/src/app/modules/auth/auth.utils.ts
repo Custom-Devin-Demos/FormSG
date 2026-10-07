@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto'
 import { AuthedSessionData, SessionData } from 'express-session'
 import { IncomingHttpHeaders } from 'http'
 import { StatusCodes } from 'http-status-codes'
@@ -112,7 +113,16 @@ export const getUserIdFromSession = (
 }
 
 export const isCronPaymentAuthValid = (header: IncomingHttpHeaders) => {
-  return header['x-formsg-cron-payment-secret'] === cronPaymentConfig.apiSecret
+  const { apiSecret } = cronPaymentConfig
+  // Fail closed: an unconfigured secret is the empty string, which an empty
+  // header value would otherwise match.
+  if (!apiSecret) return false
+  const provided = header['x-formsg-cron-payment-secret']
+  if (typeof provided !== 'string') return false
+  const providedBuffer = Buffer.from(provided)
+  const secretBuffer = Buffer.from(apiSecret)
+  if (providedBuffer.length !== secretBuffer.length) return false
+  return timingSafeEqual(providedBuffer, secretBuffer)
 }
 
 export const isCronScheduledClosureAuthValid = (

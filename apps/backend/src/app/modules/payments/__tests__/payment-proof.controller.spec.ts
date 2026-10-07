@@ -86,6 +86,35 @@ describe('stripe.controller', () => {
       })
     })
 
+    it('should return 404 when payment does not belong to the form', async () => {
+      // Arrange
+      const otherForm = {
+        ...mockForm,
+        _id: new Types.ObjectId().toHexString(),
+      } as IPopulatedForm
+      MockFormService.retrieveFullFormById.mockReturnValue(okAsync(otherForm))
+      const mockReq = expressHandler.mockRequest({
+        params: { formId: otherForm._id, paymentId: payment._id },
+      })
+      const mockRes = expressHandler.mockResponse()
+      const generatePaymentInvoiceUrlSpy = jest.spyOn(
+        PaymentProofService,
+        'generatePaymentInvoiceUrl',
+      )
+
+      // Act
+      await PaymentProofController.downloadPaymentInvoice(
+        mockReq,
+        mockRes,
+        jest.fn(),
+      )
+
+      // Assert
+      expect(generatePaymentInvoiceUrlSpy).not.toHaveBeenCalled()
+      expect(mockRes.redirect).not.toHaveBeenCalled()
+      expect(mockRes.status).toHaveBeenCalledWith(404)
+    })
+
     it('should reject when receipt url is not present', async () => {
       // Arrange
       MockFormService.retrieveFullFormById.mockReturnValue(okAsync(mockForm))
